@@ -1,0 +1,163 @@
+---------------------------------------------------------CI----------------------------------------------------------
+pipeline {
+
+    agent { label 'java' }
+	tools {
+        maven 'maven'
+        jdk 'zulu8'
+    }
+    environment{
+        PATH = "/tools/maven/apache-maven-3.6.3/bin:$PATH"
+		HOME = "${env.WORKSPACE}"
+    }
+
+    stages {
+
+       stage("Interactive_Input") {
+            steps {
+                script {
+
+                    // Variables for input
+                    def inputbranch
+
+                    // Get the input
+                    def userInput = input(
+                            id: 'userInput', message: 'Enter value below:?',
+                            parameters: [
+
+                                    string(defaultValue: 'none',
+                                            description: 'enter branch name',
+                                            name: 'branch'),
+
+                            ])
+
+                    // Save to variables. Default to empty string if not found.
+                       env.inputbranch = userInput?:''
+
+                    // Echo to console
+                    echo("BranchID: ${env.inputbranch}")
+                }
+            }
+        }
+	stage("Git Checkout"){
+		   // agent { label 'java' }
+            steps{
+                git branch: "${env.inputbranch}", credentialsId: 'git-access', url: 'https://172.16.50.92/anand/mpg.git'
+            }
+        }
+      stage("Maven Build : mpg-commons-parent"){
+            steps{
+                  sh "mvn -f  ${HOME}/mpg-service-container/mpg-commons-parent/pom.xml clean install"
+            }
+        }
+      stage("Maven Build : All jars"){
+            steps{
+                  sh "mvn -f  ${HOME}/mpg-service-container/pom.xml clean install -Pall"
+                  sh "mvn -f  ${HOME}/mpg-service-container/pom.xml clean install -Pwar"
+                  sh "mvn -f  ${HOME}/mpg-service-container/mpg-egypt-service-container/pom.xml deploy -DskipTests -Dmaven.install.skip=true"
+            }
+        }
+	  stage('build && SonarQube analysis') {
+            steps {
+                withSonarQubeEnv('mpg-jenkins-token') {
+                        sh 'mvn -version'
+                        sh 'mvn -f mpg-service-container/pom.xml sonar:sonar'
+                }
+            }
+		}	
+      stage('Print details'){
+           steps{ 
+			script{
+                 pom = readMavenPom(file: 'mpg-service-container/mpg-egypt-service-container/pom.xml')
+                 projectArtifactId = pom.getArtifactId()
+                 projectGroupId = pom.getGroupId()
+                 projectVersion = pom.getVersion()
+                 projectName = pom.getName()
+    }
+	echo "GroupID=${projectGroupId}"
+    echo "ArtifactId=${projectArtifactId}"
+	echo "VersionID=${projectVersion}"
+      }	
+	 }
+   }
+}
+
+
+---------------------------------------------------------CD------------------------------------------------------------------------
+
+pipeline {
+
+    agent any
+	
+    stages {
+
+        stage("Interactive_Input") {
+            steps {
+                script {
+
+                    // Variables for input
+                    def inputgroupid
+                    def inputartifactid
+					def inputVersion
+
+                    // Get the input
+                    def userInput = input(
+                            id: 'userInput', message: 'Enter value below:?',
+                            parameters: [
+
+                                    string(defaultValue: 'none',
+                                            description: 'enter GroupId',
+                                            name: 'GroupId'),
+                                    string(defaultValue: 'none',
+                                            description: 'enter artifact-id',
+                                            name: 'artifactid'),
+									string(defaultValue: 'none',
+                                            description: 'enter Version',
+                                            name: 'Version'),
+                            ])
+
+                    // Save to variables. Default to empty string if not found.
+                    env.inputgroupid = userInput.GroupId?:''
+                    env.inputartifactid = userInput.artifactid?:''
+					env.inputVersion = userInput.Version?:''
+
+                    // Echo to console
+                    echo("GroupID: ${env.inputgroupid}")
+                    echo("ArtifactID: ${env.inputartifactid}")
+					echo("VersionNumber: ${env.inputVersion}")
+
+                }
+            }
+        }
+     stage('run ansible nexus.yaml') {
+       steps {
+        dir("/etc/ansible") {
+         script {
+		 sh 'whoami'
+		 sh "ssh  root@172.16.48.36 -C \"ansible-playbook  /etc/ansible/nexus.yaml --extra-vars  'group=${inputgroupid} artifact=${inputartifactid} version=${inputVersion}'\""
+		    }   
+       }
+     }
+   }
+   
+    stage('run ansible for deploy') {
+       steps {
+        dir("/etc/ansible") {
+         script {
+		 sh 'whoami'
+		 sh "ssh  root@172.16.48.36  -C \"ansible-playbook  /tools/ansible-playbook/application/mpg-service-container/service-container-deploy-generic.yml -e 'env=qa app=sc deployMode=full version=${inputVersion}'\""
+		    }   
+       }
+     }
+   }
+//     stage('run test ') {
+//       steps {
+//        dir("/tools/SOAPUI/bin/") {
+//		 script {
+//	 sh './testrunner.sh -r -j   "/tools/SOAP-TESTING/EgyptSendMoneyDomestic-SMDOM.xml"'
+//   		 }
+//	    }
+//	  }
+//	 }
+ }
+}
