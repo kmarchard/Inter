@@ -1,4 +1,4 @@
----------------------------------------------------------CI----------------------------------------------------------
+---------------------------------------------------------CI java----------------------------------------------------------
 pipeline {
 
     agent { label 'java' }
@@ -83,7 +83,7 @@ pipeline {
 }
 
 
----------------------------------------------------------CD------------------------------------------------------------------------
+---------------------------------------------------------CD java------------------------------------------------------------------------
 
 pipeline {
 
@@ -161,3 +161,160 @@ pipeline {
 //	 }
  }
 }
+
+
+-------------------------------------------------------------------CI DB------------------------------------------------------------------------------
+pipeline {
+
+    agent { label 'java' }
+	tools {
+        jdk 'jdk7'
+    }
+    environment{
+        PATH = "/tools/maven/apache-maven-3.6.3/bin:$PATH"
+		HOME = "${env.WORKSPACE}"
+    }
+	
+    stages {
+	
+       stage("Interactive_Input") {
+            steps {
+                script {
+
+                    // Variables for input
+                    def inputbranch
+
+                    // Get the input
+                    def userInput = input(
+                            id: 'userInput', message: 'Enter value below:?',
+                            parameters: [
+
+                                    string(defaultValue: 'none',
+                                            description: 'enter branch name',
+                                            name: 'branch'),
+
+                            ])
+
+                    // Save to variables. Default to empty string if not found.
+                       env.inputbranch = userInput?:''
+
+                    // Echo to console
+                    echo("BranchID: ${env.inputbranch}")
+                }
+            }
+        }
+	
+	 stage("Git Checkout"){
+		   // agent { label 'java' }
+            steps{
+                git branch: "${env.inputbranch}", credentialsId: 'git-access', url: 'https://172.16.50.92/anand/mpg.git'
+            }
+        }
+		
+	stage("zip database dir"){
+	   steps{
+	    dir("$HOME/database") {
+            script{
+			      sh "pwd"
+                  sh "jar -cMf EPAS-${BUILD_TIMESTAMP}.zip EPAS"
+              }
+			 }
+           }
+        }
+		
+		 stage ('upload nexus repo'){
+		  steps{ 
+			 script{
+			  def mavenPom = readMavenPom file: 'mpg-service-container/pom.xml' 
+		       nexusArtifactUploader artifacts: [
+			   [
+			       artifactId: 'EPAS',
+       			   classifier: '',
+				   file: 'database/EPAS-${BUILD_TIMESTAMP}.zip',
+				   type: 'zip'
+				   ]
+				],
+				credentialsId: 'nexus-id',
+				groupId: 'Database',
+				nexusUrl: '172.16.50.84:8081',
+				nexusVersion: 'nexus3',
+				protocol: 'http',
+				repository: 'database-release',
+				version: "${BUILD_TIMESTAMP}"
+			   }
+		    }
+		}
+        stage('Print details'){
+           steps{ 
+			script{
+                sh "echo ${BUILD_TIMESTAMP}"
+				}
+			}
+        }			
+	   	
+	}
+}
+----------------------------------------------------------------CD DB------------------------------------------------------------------------------
+pipeline {
+
+    agent { label 'java' }
+	tools {
+        jdk 'jdk7'
+    }
+    environment{
+        PATH = "/tools/maven/apache-maven-3.6.3/bin:$PATH"
+		HOME = "${env.WORKSPACE}"
+    }
+	
+    stages {
+	
+       stage("Interactive_Input") {
+            steps {
+                script {
+
+                    // Variables for input
+                    def inputbranch
+
+                    // Get the input
+                    def userInput = input(
+                            id: 'userInput', message: 'Enter value below:?',
+                            parameters: [
+
+                                    string(defaultValue: 'none',
+                                            description: 'Enter Build Number',
+                                            name: 'date-time'),
+
+                            ])
+
+                    // Save to variables. Default to empty string if not found.
+                       env.inputbranch = userInput?:''
+
+                    // Echo to console
+                    echo("BranchID: ${env.inputbranch}")
+                }
+            }
+        }
+		
+     stage('run ansible nexus.yaml') {
+       steps {
+        dir("/etc/ansible") {
+         script {
+		 sh 'whoami'
+		 sh "ssh  root@172.16.48.36 -C \"ansible-playbook  /etc/ansible/nexus-for-db.yaml --extra-vars  'time=${inputbranch}'\""
+		    }   
+       }
+     }
+   }
+      stage('run ansible for deploy') {
+       steps {
+        dir("/etc/ansible") {
+         script {
+		 sh 'whoami'
+		 sh "ssh  root@172.16.48.36  -C \"ansible-playbook  /tools/ansible-playbook/application/database/database-deploy.yml -e 'env=c2d2 app=db ansible_ssh_pass=Mpguser@789'\""
+		}   
+      }
+    }
+  }
+ }
+}
+	
